@@ -16,6 +16,13 @@ export interface WagerTransactionRepository {
     idempotencyKey: string,
     externalTransactionId: string,
   ): Promise<WagerTransaction[]>;
+  /** Resolve a referência de uma reversão: (providerId, id externo no provedor). */
+  findByExternalId(
+    providerId: string,
+    externalTransactionId: string,
+  ): Promise<WagerTransaction | undefined>;
+  /** Já existe REFUND ou ROLLBACK PROCESSED revertendo esta transação? */
+  hasProcessedReversal(referenceTransactionId: string): Promise<boolean>;
   insert(transaction: WagerTransaction): Promise<void>;
 }
 
