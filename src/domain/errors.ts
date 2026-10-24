@@ -26,3 +26,12 @@ export class InsufficientBalanceError extends DomainError {
 export class InvalidWalletOperationError extends DomainError {
   readonly code = 'INVALID_WALLET_OPERATION';
 }
+
+export class InvalidWagerTransactionError extends DomainError {
+  readonly code = 'INVALID_WAGER_TRANSACTION';
+}
+
+/** Tentativa de transicionar uma transação já terminal: erro de programação. */
+export class InvalidTransactionStateError extends DomainError {
+  readonly code = 'INVALID_TRANSACTION_STATE';
+}
