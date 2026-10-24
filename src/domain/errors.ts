@@ -18,3 +18,11 @@ export class CurrencyMismatchError extends DomainError {
 export class InvalidLedgerEntryError extends DomainError {
   readonly code = 'INVALID_LEDGER_ENTRY';
 }
+
+export class InsufficientBalanceError extends DomainError {
+  readonly code = 'INSUFFICIENT_BALANCE';
+}
+
+export class InvalidWalletOperationError extends DomainError {
+  readonly code = 'INVALID_WALLET_OPERATION';
+}
