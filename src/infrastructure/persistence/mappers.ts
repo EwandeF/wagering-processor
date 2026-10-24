@@ -86,6 +86,7 @@ export function wagerTransactionToRecord(t: WagerTransaction): WagerTransactionR
     referenceTransactionId: t.referenceTransactionId,
     status: t.status,
     failureCode: t.failureCode,
+    observedBalance: t.observedBalance?.toString(),
     createdAt: t.createdAt,
     processedAt: t.processedAt,
   };
@@ -109,6 +110,8 @@ export function wagerTransactionFromRecord(r: WagerTransactionRecord): WagerTran
     status: r.status as WagerTransactionStatus,
     referenceTransactionId: r.referenceTransactionId,
     failureCode: r.failureCode as FailureCode | undefined,
+    observedBalance:
+      r.observedBalance === undefined ? undefined : money(r.observedBalance, r.currency),
     processedAt: r.processedAt,
   });
 }

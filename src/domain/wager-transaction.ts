@@ -29,11 +29,12 @@ export interface WagerTransactionState {
   referenceTransactionId?: string;
   failureCode?: FailureCode;
   processedAt?: Date;
+  observedBalance?: Money;
 }
 
 export type CreateWagerTransactionProps = Omit<
   WagerTransactionState,
-  'status' | 'referenceTransactionId' | 'failureCode' | 'processedAt'
+  'status' | 'referenceTransactionId' | 'failureCode' | 'processedAt' | 'observedBalance'
 >;
 
 const needsReference = (kind: WagerTransactionKind): boolean =>
@@ -58,6 +59,7 @@ export class WagerTransaction {
     private _referenceTransactionId?: string,
     private _failureCode?: FailureCode,
     private _processedAt?: Date,
+    private _observedBalance?: Money,
   ) {}
 
   /** Porta de entrada da API e da fila. Nasce PENDING. OPENING é proibido aqui. */
@@ -97,6 +99,7 @@ export class WagerTransaction {
       state.referenceTransactionId,
       state.failureCode,
       state.processedAt,
+      state.observedBalance,
     );
   }
 
@@ -159,6 +162,16 @@ export class WagerTransaction {
 
   get processedAt(): Date | undefined {
     return this._processedAt;
+  }
+
+  get observedBalance(): Money | undefined {
+    return this._observedBalance;
+  }
+
+  /** Saldo da wallet visto ao processar; é o que os replays devolvem. */
+  recordObservedBalance(balance: Money): void {
+    this.assertNotTerminal();
+    this._observedBalance = balance;
   }
 
   // ---- transições -----------------------------------------------------
