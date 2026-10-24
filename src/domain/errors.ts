@@ -14,3 +14,7 @@ export class InvalidMoneyError extends DomainError {
 export class CurrencyMismatchError extends DomainError {
   readonly code = 'CURRENCY_MISMATCH';
 }
+
+export class InvalidLedgerEntryError extends DomainError {
+  readonly code = 'INVALID_LEDGER_ENTRY';
+}
