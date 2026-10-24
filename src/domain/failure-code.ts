@@ -9,6 +9,7 @@ export enum FailureCode {
   AlreadyReversed = 'ALREADY_REVERSED',
   ReversalAmountMismatch = 'REVERSAL_AMOUNT_MISMATCH',
   CurrencyMismatch = 'CURRENCY_MISMATCH',
+  PlayerWalletMismatch = 'PLAYER_WALLET_MISMATCH',
   // FAILED: erro permanente de infraestrutura
   ProcessingFailed = 'PROCESSING_FAILED',
 }
@@ -35,5 +36,6 @@ export const FAILURE_GUIDANCE: Readonly<Record<FailureCode, ProviderAction>> = {
   [FailureCode.AlreadyReversed]: ProviderAction.GiveUp,
   [FailureCode.ReversalAmountMismatch]: ProviderAction.FixPayload,
   [FailureCode.CurrencyMismatch]: ProviderAction.FixPayload,
+  [FailureCode.PlayerWalletMismatch]: ProviderAction.FixPayload,
   [FailureCode.ProcessingFailed]: ProviderAction.ContactSupport,
 };
