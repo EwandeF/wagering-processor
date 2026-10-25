@@ -14,6 +14,7 @@ import { checkReversal } from '../domain/reversal-policy';
 import {
   DEFAULT_PENDING_REFERENCE_POLICY,
   type PendingReferencePolicy,
+  isReferenceExhausted,
   referenceDelayMs,
 } from '../domain/pending-reference-policy';
 import { WagerTransaction } from '../domain/wager-transaction';
@@ -73,6 +74,9 @@ export interface SubmitWagerTransactionResult {
   /** A inbox já tinha esta mensagem: nada foi reprocessado. */
   duplicateMessage?: boolean;
 }
+
+/** O que aconteceu com uma reversão que esperava a referência. */
+export type ReprocessOutcome = 'skipped' | 'waiting' | 'processed' | 'rejected' | 'expired';
 
 interface Outcome {
   entry?: WalletLedgerEntry;
@@ -241,6 +245,71 @@ export class SubmitWagerTransaction {
       await outbox.enqueue(OutboxMessage.enqueue(event));
     }
     return this.toResult(tx, wallet, false);
+  }
+
+  /**
+   * Procura de novo a referência de uma reversão que estava esperando. Mesma transação
+   * SQL de sempre, com a wallet travada: aplica a reversão, rejeita, continua esperando
+   * ou desiste (REFERENCE_NOT_FOUND) ao esgotar o limite de checagens.
+   */
+  async reprocessPending(
+    transactionId: string,
+    correlationId: string = uuidv7(),
+  ): Promise<ReprocessOutcome> {
+    return this.uow.run(async ({ wallets, transactions, ledger, outbox }) => {
+      const peek = await transactions.findById(transactionId);
+      if (!peek || peek.status !== WagerTransactionStatus.PendingReference) {
+        return 'skipped';
+      }
+      const wallet = await wallets.lockById(peek.walletId);
+      if (!wallet) {
+        return 'skipped';
+      }
+
+      // Relê com a wallet travada: outro worker pode ter resolvido nesse meio tempo.
+      const tx = await transactions.findById(transactionId);
+      const at = this.clock();
+      if (!tx || !tx.isReferenceDue(at)) {
+        return 'skipped';
+      }
+
+      const versionBefore = wallet.version;
+      const outcome = await this.decide(tx, wallet, transactions, at);
+
+      let result: ReprocessOutcome;
+      if (outcome.waiting) {
+        const done = tx.referenceAttempts + 1;
+        if (isReferenceExhausted(this.policy, done)) {
+          tx.retryReference(at);
+          tx.recordObservedBalance(wallet.balance);
+          tx.reject(FailureCode.ReferenceNotFound);
+          result = 'expired';
+        } else {
+          tx.retryReference(new Date(at.getTime() + referenceDelayMs(this.policy, done)));
+          result = 'waiting';
+        }
+      } else if (outcome.rejection) {
+        tx.recordObservedBalance(wallet.balance);
+        tx.reject(outcome.rejection);
+        result = 'rejected';
+      } else {
+        tx.recordObservedBalance(wallet.balance);
+        tx.markProcessed(outcome.referenceId, at);
+        result = 'processed';
+      }
+
+      await transactions.update(tx);
+      if (outcome.entry) {
+        await ledger.insert(outcome.entry);
+        await wallets.save(wallet, versionBefore);
+      }
+      if (result !== 'waiting') {
+        for (const event of this.eventsFor(tx, wallet, outcome.entry, correlationId, at)) {
+          await outbox.enqueue(OutboxMessage.enqueue(event));
+        }
+      }
+      return result;
+    });
   }
 
   /** Eventos na ordem em que devem ser publicados (os ids uuidv7 mantêm essa ordem). */

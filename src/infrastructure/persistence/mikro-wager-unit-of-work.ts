@@ -1,4 +1,4 @@
-import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
+import { type EntityData, LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { ConcurrentModificationError } from '../../application/errors';
 import type { WagerRepositories, WagerUnitOfWork } from '../../application/ports';
@@ -16,6 +16,7 @@ import {
   InboxMessageSchema,
   LedgerEntrySchema,
   OutboxMessageSchema,
+  type WagerTransactionRecord,
   WagerTransactionSchema,
   WalletSchema,
 } from './schemas';
@@ -77,6 +78,24 @@ export class MikroWagerUnitOfWork implements WagerUnitOfWork {
               status: WagerTransactionStatus.Processed,
             });
             return count > 0;
+          },
+          findById: async (id) => {
+            const record = await em.findOne(WagerTransactionSchema, { id });
+            return record ? wagerTransactionFromRecord(record) : undefined;
+          },
+          update: async (transaction) => {
+            const r = wagerTransactionToRecord(transaction);
+            // null limpa a coluna; undefined seria ignorado pelo UPDATE.
+            const changes = {
+              status: r.status,
+              failureCode: r.failureCode ?? null,
+              processedAt: r.processedAt ?? null,
+              observedBalance: r.observedBalance ?? null,
+              referenceTransactionId: r.referenceTransactionId ?? null,
+              referenceAttempts: r.referenceAttempts,
+              nextReferenceAttemptAt: r.nextReferenceAttemptAt ?? null,
+            } as unknown as EntityData<WagerTransactionRecord>;
+            await em.nativeUpdate(WagerTransactionSchema, { id: r.id }, changes);
           },
           insert: async (transaction) => {
             await em.insert(WagerTransactionSchema, wagerTransactionToRecord(transaction));

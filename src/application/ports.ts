@@ -26,6 +26,9 @@ export interface WagerTransactionRepository {
   ): Promise<WagerTransaction | undefined>;
   /** Já existe REFUND ou ROLLBACK PROCESSED revertendo esta transação? */
   hasProcessedReversal(referenceTransactionId: string): Promise<boolean>;
+  findById(id: string): Promise<WagerTransaction | undefined>;
+  /** Atualiza o que muda depois da criação: status, falha, saldo observado, agendamento. */
+  update(transaction: WagerTransaction): Promise<void>;
   insert(transaction: WagerTransaction): Promise<void>;
 }
 
