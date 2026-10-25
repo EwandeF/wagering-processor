@@ -107,7 +107,7 @@ describe('transições válidas', () => {
 
   test('PENDING -> PENDING_REFERENCE -> PROCESSED', () => {
     const t = makeRefund();
-    t.markPendingReference();
+    t.markPendingReference(at);
     expect(t.status).toBe(Status.PendingReference);
     expect(t.isTerminal()).toBe(false);
     t.markProcessed('ref-id', at);
@@ -117,7 +117,7 @@ describe('transições válidas', () => {
 
   test('PENDING_REFERENCE -> REJECTED guarda o código', () => {
     const t = makeRollback();
-    t.markPendingReference();
+    t.markPendingReference(at);
     t.reject(FailureCode.ReferenceNotFound);
     expect(t.status).toBe(Status.Rejected);
     expect(t.failureCode).toBe(FailureCode.ReferenceNotFound);
@@ -156,7 +156,7 @@ describe('transições inválidas', () => {
   test.each(Object.entries(terminals))('%s é terminal: nenhuma transição sai dele', (_, build) => {
     const t = build();
     expect(() => t.markProcessed(undefined, at)).toThrow(InvalidTransactionStateError);
-    expect(() => t.markPendingReference()).toThrow(InvalidTransactionStateError);
+    expect(() => t.markPendingReference(at)).toThrow(InvalidTransactionStateError);
     expect(() => t.reject(FailureCode.InsufficientFunds)).toThrow(InvalidTransactionStateError);
     expect(() => t.fail(FailureCode.ProcessingFailed)).toThrow(InvalidTransactionStateError);
   });
@@ -169,13 +169,13 @@ describe('transições inválidas', () => {
   });
 
   test('só REFUND e ROLLBACK podem ficar PENDING_REFERENCE', () => {
-    expect(() => make().markPendingReference()).toThrow(InvalidWagerTransactionError);
+    expect(() => make().markPendingReference(at)).toThrow(InvalidWagerTransactionError);
   });
 
   test('PENDING_REFERENCE não repete PENDING_REFERENCE', () => {
     const t = makeRefund();
-    t.markPendingReference();
-    expect(() => t.markPendingReference()).toThrow(InvalidTransactionStateError);
+    t.markPendingReference(at);
+    expect(() => t.markPendingReference(at)).toThrow(InvalidTransactionStateError);
   });
 
   test('REFUND e ROLLBACK não são processados sem a referência', () => {

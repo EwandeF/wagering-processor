@@ -38,7 +38,7 @@ const rejected = () => {
 const pending = () => {
   const t = make(Kind.Refund, '25.00', 'ext0');
   t.recordObservedBalance(brl('100.00'));
-  t.markPendingReference();
+  t.markPendingReference(at);
   return t;
 };
 

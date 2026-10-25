@@ -11,6 +11,11 @@ import type { IntegrationEvent } from '../domain/integration-event';
 import { Money, type MoneyProps } from '../domain/money';
 import { OutboxMessage } from '../domain/outbox-message';
 import { checkReversal } from '../domain/reversal-policy';
+import {
+  DEFAULT_PENDING_REFERENCE_POLICY,
+  type PendingReferencePolicy,
+  referenceDelayMs,
+} from '../domain/pending-reference-policy';
 import { WagerTransaction } from '../domain/wager-transaction';
 import {
   type EventContext,
@@ -82,6 +87,7 @@ export class SubmitWagerTransaction {
   constructor(
     private readonly uow: WagerUnitOfWork,
     private readonly clock: () => Date = () => new Date(),
+    private readonly policy: PendingReferencePolicy = DEFAULT_PENDING_REFERENCE_POLICY,
   ) {}
 
   async execute(cmd: SubmitWagerTransactionCommand): Promise<SubmitWagerTransactionResult> {
@@ -218,7 +224,7 @@ export class SubmitWagerTransaction {
 
     tx.recordObservedBalance(wallet.balance);
     if (outcome.waiting) {
-      tx.markPendingReference();
+      tx.markPendingReference(new Date(at.getTime() + referenceDelayMs(this.policy, 0)));
     } else if (outcome.rejection) {
       tx.reject(outcome.rejection);
     } else {

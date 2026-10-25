@@ -29,12 +29,23 @@ export interface WagerTransactionState {
   referenceTransactionId?: string;
   failureCode?: FailureCode;
   processedAt?: Date;
+  /** Saldo da wallet visto ao processar; é o que os replays devolvem. */
   observedBalance?: Money;
+  /** Quantas vezes o worker já procurou a referência. */
+  referenceAttempts?: number;
+  /** Quando o worker deve procurar de novo (só em PENDING_REFERENCE). */
+  nextReferenceAttemptAt?: Date;
 }
 
 export type CreateWagerTransactionProps = Omit<
   WagerTransactionState,
-  'status' | 'referenceTransactionId' | 'failureCode' | 'processedAt' | 'observedBalance'
+  | 'status'
+  | 'referenceTransactionId'
+  | 'failureCode'
+  | 'processedAt'
+  | 'observedBalance'
+  | 'referenceAttempts'
+  | 'nextReferenceAttemptAt'
 >;
 
 const needsReference = (kind: WagerTransactionKind): boolean =>
@@ -60,6 +71,8 @@ export class WagerTransaction {
     private _failureCode?: FailureCode,
     private _processedAt?: Date,
     private _observedBalance?: Money,
+    private _referenceAttempts: number = 0,
+    private _nextReferenceAttemptAt?: Date,
   ) {}
 
   /** Porta de entrada da API e da fila. Nasce PENDING. OPENING é proibido aqui. */
@@ -100,6 +113,8 @@ export class WagerTransaction {
       state.failureCode,
       state.processedAt,
       state.observedBalance,
+      state.referenceAttempts ?? 0,
+      state.nextReferenceAttemptAt,
     );
   }
 
@@ -168,6 +183,14 @@ export class WagerTransaction {
     return this._observedBalance;
   }
 
+  get referenceAttempts(): number {
+    return this._referenceAttempts;
+  }
+
+  get nextReferenceAttemptAt(): Date | undefined {
+    return this._nextReferenceAttemptAt;
+  }
+
   /** Saldo da wallet visto ao processar; é o que os replays devolvem. */
   recordObservedBalance(balance: Money): void {
     this.assertNotTerminal();
@@ -178,6 +201,7 @@ export class WagerTransaction {
   // PENDING           -> PROCESSED | PENDING_REFERENCE | REJECTED | FAILED
   // PENDING_REFERENCE -> PROCESSED | REJECTED | FAILED
   // PROCESSED, REJECTED, FAILED: terminais, não saem mais.
+  // PENDING_REFERENCE -> PENDING_REFERENCE só como nova checagem (retryReference).
 
   markProcessed(referenceTransactionId: string | undefined, at: Date): void {
     this.assertNotTerminal();
@@ -187,11 +211,13 @@ export class WagerTransaction {
       );
     }
     this._status = WagerTransactionStatus.Processed;
+    this._nextReferenceAttemptAt = undefined;
     this._referenceTransactionId = referenceTransactionId;
     this._processedAt = at;
   }
 
-  markPendingReference(): void {
+  /** A referência ainda não chegou: espera, e o worker procura de novo em `nextAttemptAt`. */
+  markPendingReference(nextAttemptAt: Date): void {
     this.assertNotTerminal();
     if (!this.requiresReference()) {
       throw new InvalidWagerTransactionError(
@@ -204,17 +230,31 @@ export class WagerTransaction {
       );
     }
     this._status = WagerTransactionStatus.PendingReference;
+    this._nextReferenceAttemptAt = nextAttemptAt;
+  }
+
+  /** O worker procurou a referência de novo e ela ainda não chegou. */
+  retryReference(nextAttemptAt: Date): void {
+    if (this._status !== WagerTransactionStatus.PendingReference) {
+      throw new InvalidTransactionStateError(
+        `transação ${this.id} está em ${this._status}, e não aguardando referência`,
+      );
+    }
+    this._referenceAttempts += 1;
+    this._nextReferenceAttemptAt = nextAttemptAt;
   }
 
   reject(code: FailureCode): void {
     this.assertNotTerminal();
     this._status = WagerTransactionStatus.Rejected;
+    this._nextReferenceAttemptAt = undefined;
     this._failureCode = code;
   }
 
   fail(code: FailureCode): void {
     this.assertNotTerminal();
     this._status = WagerTransactionStatus.Failed;
+    this._nextReferenceAttemptAt = undefined;
     this._failureCode = code;
   }
 
@@ -225,6 +265,15 @@ export class WagerTransaction {
       this._status === WagerTransactionStatus.Processed ||
       this._status === WagerTransactionStatus.Rejected ||
       this._status === WagerTransactionStatus.Failed
+    );
+  }
+
+  /** Aguardando referência e com a hora da próxima checagem já chegada. */
+  isReferenceDue(now: Date): boolean {
+    if (this._status !== WagerTransactionStatus.PendingReference) return false;
+    return (
+      this._nextReferenceAttemptAt === undefined ||
+      this._nextReferenceAttemptAt.getTime() <= now.getTime()
     );
   }
 

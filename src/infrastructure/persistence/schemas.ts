@@ -42,6 +42,8 @@ export interface WagerTransactionRecord {
   status: string;
   failureCode?: string;
   observedBalance?: string;
+  referenceAttempts: number;
+  nextReferenceAttemptAt?: Date;
   createdAt: Date;
   processedAt?: Date;
 }
@@ -67,6 +69,8 @@ export const WagerTransactionSchema = new EntitySchema<WagerTransactionRecord>({
     status: { type: 'string' },
     failureCode: { type: 'string', nullable: true },
     observedBalance: { type: 'string', columnType: 'numeric(19,2)', nullable: true },
+    referenceAttempts: { type: 'integer' },
+    nextReferenceAttemptAt: { type: 'Date', columnType: 'timestamptz', nullable: true },
     createdAt: { type: 'Date', columnType: 'timestamptz' },
     processedAt: { type: 'Date', columnType: 'timestamptz', nullable: true },
   },
