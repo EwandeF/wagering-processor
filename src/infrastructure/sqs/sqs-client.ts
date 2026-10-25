@@ -16,3 +16,9 @@ export function createSqsClient(): SQSClient {
     },
   });
 }
+
+export const wagerQueueUrl = (): string =>
+  process.env.WAGER_QUEUE_URL ?? `${sqsEndpoint()}/000000000000/wager-transactions.fifo`;
+
+export const wagerDlqUrl = (): string =>
+  process.env.WAGER_DLQ_URL ?? `${sqsEndpoint()}/000000000000/wager-transactions-dlq.fifo`;
