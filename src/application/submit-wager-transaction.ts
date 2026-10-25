@@ -1,14 +1,19 @@
 import { v7 as uuidv7 } from 'uuid';
-import { WagerTransactionKind, WagerTransactionStatus } from '../domain/enums';
+import {
+  LedgerDirection,
+  WagerTransactionKind,
+  WagerTransactionStatus,
+} from '../domain/enums';
 import { InsufficientBalanceError } from '../domain/errors';
 import { FailureCode } from '../domain/failure-code';
 import { Money, type MoneyProps } from '../domain/money';
+import { checkReversal } from '../domain/reversal-policy';
 import { WagerTransaction } from '../domain/wager-transaction';
-import type { Wallet } from '../domain/wallet';
+import type { Wallet, WalletMovement } from '../domain/wallet';
 import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry';
 import { IdempotencyConflictError, WalletNotFoundError } from './errors';
 import { hashPayload } from './payload-hash';
-import type { WagerUnitOfWork } from './ports';
+import type { WagerTransactionRepository, WagerUnitOfWork } from './ports';
 
 export interface SubmitWagerTransactionCommand {
   idempotencyKey: string;
@@ -34,6 +39,10 @@ export interface SubmitWagerTransactionResult {
 interface Outcome {
   entry?: WalletLedgerEntry;
   rejection?: FailureCode;
+  /** Referência ausente ou ainda pendente: grava PENDING_REFERENCE e espera. */
+  waiting?: boolean;
+  /** Id interno da transação revertida (REFUND e ROLLBACK processados). */
+  referenceId?: string;
 }
 
 export class SubmitWagerTransaction {
@@ -118,13 +127,15 @@ export class SubmitWagerTransaction {
 
       const versionBefore = wallet.version;
       const at = this.clock();
-      const outcome = this.apply(tx, wallet, at);
+      const outcome = await this.decide(tx, wallet, transactions, at);
 
       tx.recordObservedBalance(wallet.balance);
-      if (outcome.rejection) {
+      if (outcome.waiting) {
+        tx.markPendingReference();
+      } else if (outcome.rejection) {
         tx.reject(outcome.rejection);
       } else {
-        tx.markProcessed(undefined, at);
+        tx.markProcessed(outcome.referenceId, at);
       }
 
       // Ordem das chaves estrangeiras: transação, lançamento, saldo.
@@ -137,19 +148,20 @@ export class SubmitWagerTransaction {
     });
   }
 
-  private apply(tx: WagerTransaction, wallet: Wallet, at: Date): Outcome {
+  private async decide(
+    tx: WagerTransaction,
+    wallet: Wallet,
+    transactions: WagerTransactionRepository,
+    at: Date,
+  ): Promise<Outcome> {
     if (wallet.playerId !== tx.playerId) {
       return { rejection: FailureCode.PlayerWalletMismatch };
     }
     if (wallet.currency !== tx.money.currency) {
       return { rejection: FailureCode.CurrencyMismatch };
     }
-    if (tx.requiresReference()) {
-      // Provisório: REFUND e ROLLBACK entram na próxima etapa.
-      throw new Error(`${tx.kind} ainda não é suportado`);
-    }
 
-    const movement = {
+    const movement: WalletMovement = {
       money: tx.money,
       transactionId: tx.id,
       entryId: uuidv7(),
@@ -158,20 +170,62 @@ export class SubmitWagerTransaction {
 
     switch (tx.kind) {
       case WagerTransactionKind.Bet:
-        try {
-          return { entry: wallet.debit(movement) };
-        } catch (error) {
-          if (error instanceof InsufficientBalanceError) {
-            return { rejection: FailureCode.InsufficientFunds };
-          }
-          throw error;
-        }
+        return this.tryMove(() => wallet.debit(movement), FailureCode.InsufficientFunds);
       case WagerTransactionKind.Win:
         return { entry: wallet.credit(movement) };
       case WagerTransactionKind.Loss:
         return {};
+      case WagerTransactionKind.Refund:
+      case WagerTransactionKind.Rollback:
+        return this.decideReversal(tx, wallet, transactions, movement);
       default:
         throw new Error(`tipo de transação não suportado: ${tx.kind}`);
+    }
+  }
+
+  private async decideReversal(
+    tx: WagerTransaction,
+    wallet: Wallet,
+    transactions: WagerTransactionRepository,
+    movement: WalletMovement,
+  ): Promise<Outcome> {
+    const referenceExternalId = tx.referenceExternalTransactionId;
+    if (!referenceExternalId) {
+      throw new Error(`${tx.kind} sem referência: o domínio deveria ter recusado`);
+    }
+
+    const reference = await transactions.findByExternalId(tx.providerId, referenceExternalId);
+    if (
+      !reference ||
+      reference.status === WagerTransactionStatus.Pending ||
+      reference.status === WagerTransactionStatus.PendingReference
+    ) {
+      return { waiting: true };
+    }
+
+    const alreadyReversed = await transactions.hasProcessedReversal(reference.id);
+    const rejection = checkReversal(tx, reference, alreadyReversed);
+    if (rejection) {
+      return { rejection };
+    }
+
+    const direction = tx.ledgerDirectionFor(reference);
+    const outcome = this.tryMove(
+      () => (direction === LedgerDirection.Debit ? wallet.debit(movement) : wallet.credit(movement)),
+      FailureCode.ReversalWouldOverdraw,
+    );
+    return outcome.rejection ? outcome : { ...outcome, referenceId: reference.id };
+  }
+
+  /** Converte "saldo insuficiente" em rejeição de negócio; outros erros sobem. */
+  private tryMove(move: () => WalletLedgerEntry, onInsufficient: FailureCode): Outcome {
+    try {
+      return { entry: move() };
+    } catch (error) {
+      if (error instanceof InsufficientBalanceError) {
+        return { rejection: onInsufficient };
+      }
+      throw error;
     }
   }
 

@@ -2,6 +2,7 @@ import { LockMode, UniqueConstraintViolationException } from '@mikro-orm/core';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { ConcurrentModificationError } from '../../application/errors';
 import type { WagerRepositories, WagerUnitOfWork } from '../../application/ports';
+import { WagerTransactionStatus } from '../../domain/enums';
 import {
   ledgerEntryToRecord,
   wagerTransactionFromRecord,
@@ -50,6 +51,20 @@ export class MikroWagerUnitOfWork implements WagerUnitOfWork {
               $or: [{ idempotencyKey }, { externalTransactionId }],
             });
             return records.map(wagerTransactionFromRecord);
+          },
+          findByExternalId: async (providerId, externalTransactionId) => {
+            const record = await em.findOne(WagerTransactionSchema, {
+              providerId,
+              externalTransactionId,
+            });
+            return record ? wagerTransactionFromRecord(record) : undefined;
+          },
+          hasProcessedReversal: async (referenceTransactionId) => {
+            const count = await em.count(WagerTransactionSchema, {
+              referenceTransactionId,
+              status: WagerTransactionStatus.Processed,
+            });
+            return count > 0;
           },
           insert: async (transaction) => {
             await em.insert(WagerTransactionSchema, wagerTransactionToRecord(transaction));
