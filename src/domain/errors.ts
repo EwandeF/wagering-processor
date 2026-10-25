@@ -39,3 +39,7 @@ export class InvalidTransactionStateError extends DomainError {
 export class InvalidOutboxStateError extends DomainError {
   readonly code = 'INVALID_OUTBOX_STATE';
 }
+
+export class InvalidInboxStateError extends DomainError {
+  readonly code = 'INVALID_INBOX_STATE';
+}

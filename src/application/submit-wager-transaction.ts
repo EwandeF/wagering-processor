@@ -6,6 +6,7 @@ import {
 } from '../domain/enums';
 import { InsufficientBalanceError } from '../domain/errors';
 import { FailureCode } from '../domain/failure-code';
+import { InboxMessage } from '../domain/inbox-message';
 import type { IntegrationEvent } from '../domain/integration-event';
 import { Money, type MoneyProps } from '../domain/money';
 import { OutboxMessage } from '../domain/outbox-message';
@@ -20,9 +21,26 @@ import {
 } from '../domain/wager-events';
 import type { Wallet, WalletMovement } from '../domain/wallet';
 import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry';
-import { IdempotencyConflictError, WalletNotFoundError } from './errors';
+import {
+  IdempotencyConflictError,
+  InboxPayloadMismatchError,
+  WalletNotFoundError,
+} from './errors';
 import { hashPayload } from './payload-hash';
-import type { WagerTransactionRepository, WagerUnitOfWork } from './ports';
+import type {
+  LedgerRepository,
+  OutboxRepository,
+  WagerTransactionRepository,
+  WagerUnitOfWork,
+  WalletRepository,
+} from './ports';
+
+/** Identifica a mensagem de fila de onde o comando veio (ausente no caso HTTP). */
+export interface InboxInput {
+  consumerName: string;
+  messageId: string;
+  payloadHash: string;
+}
 
 export interface SubmitWagerTransactionCommand {
   idempotencyKey: string;
@@ -37,6 +55,8 @@ export interface SubmitWagerTransactionCommand {
   referenceExternalTransactionId?: string;
   /** Rastreia a operação nos logs e eventos; gerado se ausente. */
   correlationId?: string;
+  /** Quando presente, a mensagem é deduplicada e registrada na inbox, na mesma transação. */
+  inbox?: InboxInput;
 }
 
 export interface SubmitWagerTransactionResult {
@@ -45,6 +65,8 @@ export interface SubmitWagerTransactionResult {
   balance: MoneyProps;
   failureCode?: FailureCode;
   idempotentReplay: boolean;
+  /** A inbox já tinha esta mensagem: nada foi reprocessado. */
+  duplicateMessage?: boolean;
 }
 
 interface Outcome {
@@ -100,11 +122,11 @@ export class SubmitWagerTransaction {
     build(); // valida o comando cedo, antes de abrir transação ou pegar lock
 
     try {
-      return await this.attempt(build(), correlationId);
+      return await this.attempt(build(), correlationId, cmd.inbox);
     } catch (error) {
       if (this.uow.isDuplicateKeyError(error)) {
         // Colidiu numa chave única: a segunda tentativa enxerga a linha vencedora.
-        return this.attempt(build(), correlationId);
+        return this.attempt(build(), correlationId, cmd.inbox);
       }
       throw error;
     }
@@ -113,58 +135,106 @@ export class SubmitWagerTransaction {
   private attempt(
     tx: WagerTransaction,
     correlationId: string,
+    inboxInput: InboxInput | undefined,
   ): Promise<SubmitWagerTransactionResult> {
-    return this.uow.run(async ({ wallets, transactions, ledger, outbox }) => {
+    return this.uow.run(async ({ wallets, transactions, ledger, outbox, inbox }) => {
       const wallet = await wallets.lockById(tx.walletId);
       if (!wallet) {
         throw new WalletNotFoundError(`wallet ${tx.walletId} não existe`);
       }
 
-      const existing = await transactions.findExisting(
-        tx.providerId,
-        tx.idempotencyKey,
-        tx.externalTransactionId,
+      // Inbox primeiro, com a wallet travada: entregas simultâneas da mesma
+      // mensagem são serializadas, e a segunda enxerga a primeira.
+      if (inboxInput) {
+        const prior = await inbox.find(inboxInput.consumerName, inboxInput.messageId);
+        if (prior) {
+          if (!prior.matchesPayload(inboxInput.payloadHash)) {
+            throw new InboxPayloadMismatchError(
+              `a mensagem ${inboxInput.messageId} já foi recebida com outro conteúdo`,
+            );
+          }
+          const original = (
+            await transactions.findExisting(tx.providerId, tx.idempotencyKey, tx.externalTransactionId)
+          ).find(
+            (e) =>
+              e.idempotencyKey === tx.idempotencyKey &&
+              e.externalTransactionId === tx.externalTransactionId &&
+              e.matchesPayload(tx.payloadHash),
+          );
+          if (!original) {
+            throw new Error(`a inbox registra ${inboxInput.messageId}, mas a transação não existe`);
+          }
+          return { ...this.toResult(original, wallet, true), duplicateMessage: true };
+        }
+      }
+
+      const result = await this.process(
+        tx, wallet, transactions, ledger, wallets, outbox, correlationId,
       );
-      const replay = existing.find(
-        (e) =>
-          e.idempotencyKey === tx.idempotencyKey &&
-          e.externalTransactionId === tx.externalTransactionId &&
-          e.matchesPayload(tx.payloadHash),
-      );
-      if (replay) {
-        // Replay não emite eventos: eles nasceram na primeira execução.
-        return this.toResult(replay, wallet, true);
-      }
-      if (existing.length > 0) {
-        throw new IdempotencyConflictError(
-          'idempotency key ou id externo já usados com payload diferente',
-        );
-      }
 
-      const versionBefore = wallet.version;
-      const at = this.clock();
-      const outcome = await this.decide(tx, wallet, transactions, at);
-
-      tx.recordObservedBalance(wallet.balance);
-      if (outcome.waiting) {
-        tx.markPendingReference();
-      } else if (outcome.rejection) {
-        tx.reject(outcome.rejection);
-      } else {
-        tx.markProcessed(outcome.referenceId, at);
+      if (inboxInput) {
+        const at = this.clock();
+        const received = InboxMessage.receive({ ...inboxInput, receivedAt: at });
+        received.markProcessed(at);
+        await inbox.insert(received);
       }
-
-      // Mesma transação SQL: transação, lançamento, saldo e eventos.
-      await transactions.insert(tx);
-      if (outcome.entry) {
-        await ledger.insert(outcome.entry);
-        await wallets.save(wallet, versionBefore);
-      }
-      for (const event of this.eventsFor(tx, wallet, outcome.entry, correlationId, at)) {
-        await outbox.enqueue(OutboxMessage.enqueue(event));
-      }
-      return this.toResult(tx, wallet, false);
+      return result;
     });
+  }
+
+  private async process(
+    tx: WagerTransaction,
+    wallet: Wallet,
+    transactions: WagerTransactionRepository,
+    ledger: LedgerRepository,
+    wallets: WalletRepository,
+    outbox: OutboxRepository,
+    correlationId: string,
+  ): Promise<SubmitWagerTransactionResult> {
+    const existing = await transactions.findExisting(
+      tx.providerId,
+      tx.idempotencyKey,
+      tx.externalTransactionId,
+    );
+    const replay = existing.find(
+      (e) =>
+        e.idempotencyKey === tx.idempotencyKey &&
+        e.externalTransactionId === tx.externalTransactionId &&
+        e.matchesPayload(tx.payloadHash),
+    );
+    if (replay) {
+      // Replay não emite eventos: eles nasceram na primeira execução.
+      return this.toResult(replay, wallet, true);
+    }
+    if (existing.length > 0) {
+      throw new IdempotencyConflictError(
+        'idempotency key ou id externo já usados com payload diferente',
+      );
+    }
+
+    const versionBefore = wallet.version;
+    const at = this.clock();
+    const outcome = await this.decide(tx, wallet, transactions, at);
+
+    tx.recordObservedBalance(wallet.balance);
+    if (outcome.waiting) {
+      tx.markPendingReference();
+    } else if (outcome.rejection) {
+      tx.reject(outcome.rejection);
+    } else {
+      tx.markProcessed(outcome.referenceId, at);
+    }
+
+    // Mesma transação SQL: transação, lançamento, saldo e eventos.
+    await transactions.insert(tx);
+    if (outcome.entry) {
+      await ledger.insert(outcome.entry);
+      await wallets.save(wallet, versionBefore);
+    }
+    for (const event of this.eventsFor(tx, wallet, outcome.entry, correlationId, at)) {
+      await outbox.enqueue(OutboxMessage.enqueue(event));
+    }
+    return this.toResult(tx, wallet, false);
   }
 
   /** Eventos na ordem em que devem ser publicados (os ids uuidv7 mantêm essa ordem). */

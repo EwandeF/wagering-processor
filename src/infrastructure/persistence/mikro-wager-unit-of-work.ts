@@ -3,6 +3,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 import { ConcurrentModificationError } from '../../application/errors';
 import type { WagerRepositories, WagerUnitOfWork } from '../../application/ports';
 import { WagerTransactionStatus } from '../../domain/enums';
+import { inboxMessageFromRecord, inboxMessageToRecord } from './inbox-mappers';
 import {
   ledgerEntryToRecord,
   wagerTransactionFromRecord,
@@ -12,6 +13,7 @@ import {
 } from './mappers';
 import { outboxMessageToRecord } from './outbox-mappers';
 import {
+  InboxMessageSchema,
   LedgerEntrySchema,
   OutboxMessageSchema,
   WagerTransactionSchema,
@@ -88,6 +90,15 @@ export class MikroWagerUnitOfWork implements WagerUnitOfWork {
         outbox: {
           enqueue: async (message) => {
             await em.insert(OutboxMessageSchema, outboxMessageToRecord(message));
+          },
+        },
+        inbox: {
+          find: async (consumerName, messageId) => {
+            const record = await em.findOne(InboxMessageSchema, { consumerName, messageId });
+            return record ? inboxMessageFromRecord(record) : undefined;
+          },
+          insert: async (message) => {
+            await em.insert(InboxMessageSchema, inboxMessageToRecord(message));
           },
         },
       }),

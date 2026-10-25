@@ -1,3 +1,4 @@
+import type { InboxMessage } from '../domain/inbox-message';
 import type { OutboxMessage } from '../domain/outbox-message';
 import type { WagerTransaction } from '../domain/wager-transaction';
 import type { Wallet } from '../domain/wallet';
@@ -37,11 +38,18 @@ export interface OutboxRepository {
   enqueue(message: OutboxMessage): Promise<void>;
 }
 
+/** Mensagens de fila já tratadas, por (consumerName, messageId). */
+export interface InboxRepository {
+  find(consumerName: string, messageId: string): Promise<InboxMessage | undefined>;
+  insert(message: InboxMessage): Promise<void>;
+}
+
 export interface WagerRepositories {
   wallets: WalletRepository;
   transactions: WagerTransactionRepository;
   ledger: LedgerRepository;
   outbox: OutboxRepository;
+  inbox: InboxRepository;
 }
 
 /** Tudo que roda em `run` participa da mesma transação SQL. */

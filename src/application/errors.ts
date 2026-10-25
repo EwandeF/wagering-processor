@@ -21,3 +21,8 @@ export class IdempotencyConflictError extends DomainError {
 export class ConcurrentModificationError extends DomainError {
   readonly code = 'CONCURRENT_MODIFICATION';
 }
+
+/** O mesmo messageId chegou com conteúdo diferente: mensagem adulterada ou corrompida. */
+export class InboxPayloadMismatchError extends DomainError {
+  readonly code = 'INBOX_PAYLOAD_MISMATCH';
+}
