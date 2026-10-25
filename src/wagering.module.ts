@@ -14,6 +14,7 @@ import { WalletsController } from './interfaces/http/wallets.controller';
 
 @Module({
   controllers: [WalletsController, TransactionsController],
+  exports: [SubmitWagerTransaction],
   providers: [
     {
       provide: WAGER_UNIT_OF_WORK,
