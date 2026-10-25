@@ -8,6 +8,7 @@ import {
   wagerTransactionFromRecord,
   wagerTransactionToRecord,
   walletFromRecord,
+  walletToRecord,
 } from './mappers';
 import { LedgerEntrySchema, WagerTransactionSchema, WalletSchema } from './schemas';
 
@@ -19,6 +20,9 @@ export class MikroWagerUnitOfWork implements WagerUnitOfWork {
     return this.orm.em.fork().transactional(async (em) =>
       work({
         wallets: {
+          insert: async (wallet) => {
+            await em.insert(WalletSchema, walletToRecord(wallet));
+          },
           lockById: async (id) => {
             const record = await em.findOne(
               WalletSchema,

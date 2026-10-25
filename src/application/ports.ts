@@ -7,6 +7,7 @@ export interface WalletRepository {
   lockById(id: string): Promise<Wallet | undefined>;
   /** Grava saldo e version; falha se a version no banco não for a esperada. */
   save(wallet: Wallet, expectedVersion: number): Promise<void>;
+  insert(wallet: Wallet): Promise<void>;
 }
 
 export interface WagerTransactionRepository {

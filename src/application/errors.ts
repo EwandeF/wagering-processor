@@ -4,6 +4,14 @@ export class WalletNotFoundError extends DomainError {
   readonly code = 'WALLET_NOT_FOUND';
 }
 
+export class TransactionNotFoundError extends DomainError {
+  readonly code = 'TRANSACTION_NOT_FOUND';
+}
+
+export class WalletAlreadyExistsError extends DomainError {
+  readonly code = 'WALLET_ALREADY_EXISTS';
+}
+
 /** Mesma idempotency key (ou mesmo id externo) com payload diferente. */
 export class IdempotencyConflictError extends DomainError {
   readonly code = 'IDEMPOTENCY_CONFLICT';
