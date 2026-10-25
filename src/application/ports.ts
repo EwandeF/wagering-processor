@@ -1,3 +1,4 @@
+import type { OutboxMessage } from '../domain/outbox-message';
 import type { WagerTransaction } from '../domain/wager-transaction';
 import type { Wallet } from '../domain/wallet';
 import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry';
@@ -31,10 +32,16 @@ export interface LedgerRepository {
   insert(entry: WalletLedgerEntry): Promise<void>;
 }
 
+/** Eventos gravados na mesma transação SQL da mudança financeira. */
+export interface OutboxRepository {
+  enqueue(message: OutboxMessage): Promise<void>;
+}
+
 export interface WagerRepositories {
   wallets: WalletRepository;
   transactions: WagerTransactionRepository;
   ledger: LedgerRepository;
+  outbox: OutboxRepository;
 }
 
 /** Tudo que roda em `run` participa da mesma transação SQL. */

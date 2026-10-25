@@ -6,9 +6,18 @@ import {
 } from '../domain/enums';
 import { InsufficientBalanceError } from '../domain/errors';
 import { FailureCode } from '../domain/failure-code';
+import type { IntegrationEvent } from '../domain/integration-event';
 import { Money, type MoneyProps } from '../domain/money';
+import { OutboxMessage } from '../domain/outbox-message';
 import { checkReversal } from '../domain/reversal-policy';
 import { WagerTransaction } from '../domain/wager-transaction';
+import {
+  type EventContext,
+  WagerTransactionPendingReference,
+  WagerTransactionProcessed,
+  WagerTransactionRejected,
+  WalletBalanceChanged,
+} from '../domain/wager-events';
 import type { Wallet, WalletMovement } from '../domain/wallet';
 import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry';
 import { IdempotencyConflictError, WalletNotFoundError } from './errors';
@@ -26,6 +35,8 @@ export interface SubmitWagerTransactionCommand {
   kind: WagerTransactionKind;
   money: MoneyProps;
   referenceExternalTransactionId?: string;
+  /** Rastreia a operação nos logs e eventos; gerado se ausente. */
+  correlationId?: string;
 }
 
 export interface SubmitWagerTransactionResult {
@@ -53,6 +64,7 @@ export class SubmitWagerTransaction {
 
   async execute(cmd: SubmitWagerTransactionCommand): Promise<SubmitWagerTransactionResult> {
     const money = Money.from(cmd.money);
+    const correlationId = cmd.correlationId ?? uuidv7();
 
     // Só campos de negócio: o header Idempotency-Key e metadados ficam de fora.
     const payloadHash = hashPayload({
@@ -88,18 +100,21 @@ export class SubmitWagerTransaction {
     build(); // valida o comando cedo, antes de abrir transação ou pegar lock
 
     try {
-      return await this.attempt(build());
+      return await this.attempt(build(), correlationId);
     } catch (error) {
       if (this.uow.isDuplicateKeyError(error)) {
         // Colidiu numa chave única: a segunda tentativa enxerga a linha vencedora.
-        return this.attempt(build());
+        return this.attempt(build(), correlationId);
       }
       throw error;
     }
   }
 
-  private attempt(tx: WagerTransaction): Promise<SubmitWagerTransactionResult> {
-    return this.uow.run(async ({ wallets, transactions, ledger }) => {
+  private attempt(
+    tx: WagerTransaction,
+    correlationId: string,
+  ): Promise<SubmitWagerTransactionResult> {
+    return this.uow.run(async ({ wallets, transactions, ledger, outbox }) => {
       const wallet = await wallets.lockById(tx.walletId);
       if (!wallet) {
         throw new WalletNotFoundError(`wallet ${tx.walletId} não existe`);
@@ -117,6 +132,7 @@ export class SubmitWagerTransaction {
           e.matchesPayload(tx.payloadHash),
       );
       if (replay) {
+        // Replay não emite eventos: eles nasceram na primeira execução.
         return this.toResult(replay, wallet, true);
       }
       if (existing.length > 0) {
@@ -138,14 +154,49 @@ export class SubmitWagerTransaction {
         tx.markProcessed(outcome.referenceId, at);
       }
 
-      // Ordem das chaves estrangeiras: transação, lançamento, saldo.
+      // Mesma transação SQL: transação, lançamento, saldo e eventos.
       await transactions.insert(tx);
       if (outcome.entry) {
         await ledger.insert(outcome.entry);
         await wallets.save(wallet, versionBefore);
       }
+      for (const event of this.eventsFor(tx, wallet, outcome.entry, correlationId, at)) {
+        await outbox.enqueue(OutboxMessage.enqueue(event));
+      }
       return this.toResult(tx, wallet, false);
     });
+  }
+
+  /** Eventos na ordem em que devem ser publicados (os ids uuidv7 mantêm essa ordem). */
+  private eventsFor(
+    tx: WagerTransaction,
+    wallet: Wallet,
+    entry: WalletLedgerEntry | undefined,
+    correlationId: string,
+    at: Date,
+  ): IntegrationEvent<unknown>[] {
+    const ctx = (): EventContext => ({
+      eventId: uuidv7(),
+      correlationId,
+      causationId: tx.id,
+      occurredAt: at,
+    });
+
+    switch (tx.status) {
+      case WagerTransactionStatus.Processed: {
+        const events: IntegrationEvent<unknown>[] = [WagerTransactionProcessed.from(tx, ctx())];
+        if (entry) {
+          events.push(WalletBalanceChanged.from(wallet, entry, ctx()));
+        }
+        return events;
+      }
+      case WagerTransactionStatus.Rejected:
+        return [WagerTransactionRejected.from(tx, ctx())];
+      case WagerTransactionStatus.PendingReference:
+        return [WagerTransactionPendingReference.from(tx, ctx())];
+      default:
+        throw new Error(`transação ${tx.id} terminou em ${tx.status}, sem evento definido`);
+    }
   }
 
   private async decide(

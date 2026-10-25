@@ -35,3 +35,7 @@ export class InvalidWagerTransactionError extends DomainError {
 export class InvalidTransactionStateError extends DomainError {
   readonly code = 'INVALID_TRANSACTION_STATE';
 }
+
+export class InvalidOutboxStateError extends DomainError {
+  readonly code = 'INVALID_OUTBOX_STATE';
+}

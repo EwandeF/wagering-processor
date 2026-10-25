@@ -10,7 +10,13 @@ import {
   walletFromRecord,
   walletToRecord,
 } from './mappers';
-import { LedgerEntrySchema, WagerTransactionSchema, WalletSchema } from './schemas';
+import { outboxMessageToRecord } from './outbox-mappers';
+import {
+  LedgerEntrySchema,
+  OutboxMessageSchema,
+  WagerTransactionSchema,
+  WalletSchema,
+} from './schemas';
 
 export class MikroWagerUnitOfWork implements WagerUnitOfWork {
   constructor(private readonly orm: MikroORM) {}
@@ -77,6 +83,11 @@ export class MikroWagerUnitOfWork implements WagerUnitOfWork {
         ledger: {
           insert: async (entry) => {
             await em.insert(LedgerEntrySchema, ledgerEntryToRecord(entry));
+          },
+        },
+        outbox: {
+          enqueue: async (message) => {
+            await em.insert(OutboxMessageSchema, outboxMessageToRecord(message));
           },
         },
       }),
