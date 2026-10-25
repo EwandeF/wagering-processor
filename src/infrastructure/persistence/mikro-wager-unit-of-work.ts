@@ -80,7 +80,12 @@ export class MikroWagerUnitOfWork implements WagerUnitOfWork {
             return count > 0;
           },
           findById: async (id) => {
-            const record = await em.findOne(WagerTransactionSchema, { id });
+            const record = await em.findOne(
+              WagerTransactionSchema,
+              { id },
+              // refresh: lê do banco mesmo que o Identity Map já tenha esta linha
+              { refresh: true },
+            );
             return record ? wagerTransactionFromRecord(record) : undefined;
           },
           update: async (transaction) => {
