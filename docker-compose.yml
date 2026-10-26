@@ -1,3 +1,28 @@
+x-app: &app
+  build: .
+  image: wagering-processor:local
+  profiles: ["app"]
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    localstack:
+      condition: service_healthy
+  environment:
+    DATABASE_URL: postgresql://wager:wager@postgres:5432/wager
+    SQS_ENDPOINT: http://localstack:4566
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: test
+    AWS_SECRET_ACCESS_KEY: test
+    PORT: "3000"
+    WORKERS_ENABLED: "true"
+  healthcheck:
+    test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 10s
+  restart: unless-stopped
+
 services:
   postgres:
     image: postgres:16
@@ -21,3 +46,29 @@ services:
       - "4566:4566"
     volumes:
       - ./infra/localstack-init.sh:/etc/localstack/init/ready.d/init.sh
+
+  # Aplica as migrations uma única vez; as instâncias só sobem depois que ele termina.
+  migrate:
+    build: .
+    image: wagering-processor:local
+    profiles: ["app"]
+    command: ["bun", "run", "src/infrastructure/database/migrate.ts", "up"]
+    environment:
+      DATABASE_URL: postgresql://wager:wager@postgres:5432/wager
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app1:
+    <<: *app
+    ports:
+      - "3001:3000"
+  app2:
+    <<: *app
+    ports:
+      - "3002:3000"
+  app3:
+    <<: *app
+    ports:
+      - "3003:3000"

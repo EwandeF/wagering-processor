@@ -1,10 +1,19 @@
 {
   "name": "wagering-processor",
-  "module": "index.ts",
+  "module": "src/main.ts",
   "type": "module",
   "private": true,
   "scripts": {
-    "typecheck": "bun check"
+    "start": "bun run src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "migrate:up": "bun run src/infrastructure/database/migrate.ts up",
+    "migrate:down": "bun run src/infrastructure/database/migrate.ts down",
+    "migrate:pending": "bun run src/infrastructure/database/migrate.ts pending",
+    "infra:up": "docker compose up -d",
+    "stack:up": "docker compose --profile app up -d --build",
+    "stack:down": "docker compose --profile app stop app1 app2 app3",
+    "stack:failover": "bun run scripts/stack-failover.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",

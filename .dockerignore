@@ -1,0 +1,8 @@
+node_modules
+.git
+.vs
+dist
+test
+infra
+*.log
+.env
