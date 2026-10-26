@@ -237,6 +237,8 @@ describe('ponta a ponta, com os workers ligados', () => {
       const second = await bootFullApp(queues);
       try {
         await waitFor(async () => (await walletsWithBalance(ids, '40.00')) === 8, 90_000);
+        // O publisher da instância viva ainda precisa esvaziar a outbox: só depois ela pode ser desligada.
+        await waitFor(async () => (await unpublished(ids)) === 0, 60_000);
       } finally {
         await second.app.close().catch(() => {});
       }
