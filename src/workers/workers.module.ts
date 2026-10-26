@@ -25,31 +25,10 @@ import { type ConsumerEvent, WagerQueueConsumer } from '../infrastructure/sqs/wa
 import { BACKGROUND_WORKERS, ORM, SQS_CLIENT } from '../infrastructure/tokens';
 import { WageringModule } from '../wagering.module';
 import { BackgroundWorkers } from './background-workers';
+import { recordConsumerEvent } from './consumer-metrics';
 
 const describeError = (error: unknown): string =>
   error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-
-function recordConsumerEvent(metrics: Metrics, event: ConsumerEvent): void {
-  switch (event.type) {
-    case 'processed':
-      metrics.consumerMessages.inc({ result: event.duplicateMessage ? 'duplicate_message' : 'processed' });
-      break;
-    case 'business-conflict':
-      metrics.consumerMessages.inc({ result: 'business_conflict' });
-      break;
-    case 'retry':
-      metrics.consumerRetries.inc();
-      break;
-    case 'dead-letter':
-      metrics.dlqMessages.inc({ reason: event.reason });
-      break;
-    case 'released':
-      metrics.consumerMessages.inc({ result: 'released' });
-      break;
-    default:
-      break;
-  }
-}
 
 @Module({
   imports: [WageringModule],
