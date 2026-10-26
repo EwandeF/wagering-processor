@@ -98,7 +98,11 @@ export class WorkersModule implements OnApplicationBootstrap, BeforeApplicationS
   }
 
   /** Roda antes de fechar o servidor HTTP e o banco: os workers terminam o que começaram. */
-  async beforeApplicationShutdown(): Promise<void> {
+  async beforeApplicationShutdown(signal?: string): Promise<void> {
+    const logger = new Logger('Workers');
+    const t0 = Date.now();
+    logger.log(`encerrando workers (sinal: ${signal ?? 'nenhum'})`);
     await this.workers.stop();
+    logger.log(`workers encerrados em ${Date.now() - t0} ms`);
   }
 }
