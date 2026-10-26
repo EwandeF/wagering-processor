@@ -28,10 +28,12 @@ import {
 import type { Wallet, WalletMovement } from '../domain/wallet';
 import type { WalletLedgerEntry } from '../domain/wallet-ledger-entry';
 import {
+  ConcurrentModificationError,
   IdempotencyConflictError,
   InboxPayloadMismatchError,
   WalletNotFoundError,
 } from './errors';
+import { NOOP_OBSERVER, type WagerObserver } from './observer';
 import { hashPayload } from './payload-hash';
 import type {
   LedgerRepository,
@@ -92,9 +94,11 @@ export class SubmitWagerTransaction {
     private readonly uow: WagerUnitOfWork,
     private readonly clock: () => Date = () => new Date(),
     private readonly policy: PendingReferencePolicy = DEFAULT_PENDING_REFERENCE_POLICY,
+    private readonly observer: WagerObserver = NOOP_OBSERVER,
   ) {}
 
   async execute(cmd: SubmitWagerTransactionCommand): Promise<SubmitWagerTransactionResult> {
+    const startedAt = performance.now();
     const money = Money.from(cmd.money);
     const correlationId = cmd.correlationId ?? uuidv7();
 
@@ -131,14 +135,53 @@ export class SubmitWagerTransaction {
 
     build(); // valida o comando cedo, antes de abrir transação ou pegar lock
 
+    let result: SubmitWagerTransactionResult;
     try {
-      return await this.attempt(build(), correlationId, cmd.inbox);
+      result = await this.attempt(build(), correlationId, cmd.inbox);
     } catch (error) {
-      if (this.uow.isDuplicateKeyError(error)) {
-        // Colidiu numa chave única: a segunda tentativa enxerga a linha vencedora.
-        return this.attempt(build(), correlationId, cmd.inbox);
+      if (!this.uow.isDuplicateKeyError(error)) {
+        if (error instanceof ConcurrentModificationError) {
+          this.observer.lockConflict('version_conflict');
+        }
+        throw error;
       }
-      throw error;
+      // Colidiu numa chave única: a segunda tentativa enxerga a linha vencedora.
+      this.observer.lockConflict('duplicate_key_retry');
+      result = await this.attempt(build(), correlationId, cmd.inbox);
+    }
+    // Só depois do commit: o que foi desfeito nunca chega à telemetria.
+    this.report(cmd, correlationId, result, performance.now() - startedAt);
+    return result;
+  }
+
+  private report(
+    cmd: SubmitWagerTransactionCommand,
+    correlationId: string,
+    result: SubmitWagerTransactionResult,
+    durationMs: number,
+  ): void {
+    const base = {
+      transactionId: result.transactionId,
+      walletId: cmd.walletId,
+      providerId: cmd.providerId,
+      kind: cmd.kind,
+      correlationId,
+    };
+    try {
+      if (result.duplicateMessage) {
+        this.observer.duplicateDetected({ ...base, source: 'inbox' });
+      } else if (result.idempotentReplay) {
+        this.observer.duplicateDetected({ ...base, source: 'idempotency' });
+      } else {
+        this.observer.transactionRecorded({
+          ...base,
+          status: result.status,
+          failureCode: result.failureCode,
+          durationMs,
+        });
+      }
+    } catch {
+      // Telemetria nunca derruba o processamento.
     }
   }
 
@@ -148,7 +191,9 @@ export class SubmitWagerTransaction {
     inboxInput: InboxInput | undefined,
   ): Promise<SubmitWagerTransactionResult> {
     return this.uow.run(async ({ wallets, transactions, ledger, outbox, inbox }) => {
+      const lockStartedAt = performance.now();
       const wallet = await wallets.lockById(tx.walletId);
+      this.observer.walletLockWaited(performance.now() - lockStartedAt);
       if (!wallet) {
         throw new WalletNotFoundError(`wallet ${tx.walletId} não existe`);
       }

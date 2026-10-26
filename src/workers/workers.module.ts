@@ -9,47 +9,74 @@ import {
 } from '@nestjs/common';
 import { PublishOutbox } from '../application/publish-outbox';
 import { ReprocessPendingReferences } from '../application/reprocess-pending-references';
-import type { SubmitWagerTransaction } from '../application/submit-wager-transaction';
+import { SubmitWagerTransaction } from '../application/submit-wager-transaction';
 import {
   consumerMaxReceiveCount,
   outboxPollMs,
   referencePollMs,
   workersEnabled,
 } from '../config';
+import { Metrics } from '../infrastructure/observability/metrics';
 import { MikroOutboxStore } from '../infrastructure/persistence/mikro-outbox-store';
 import { MikroPendingReferenceFinder } from '../infrastructure/persistence/mikro-pending-reference-finder';
-import {
-  eventsQueueUrl,
-  wagerDlqUrl,
-  wagerQueueUrl,
-} from '../infrastructure/sqs/sqs-client';
+import { eventsQueueUrl, wagerDlqUrl, wagerQueueUrl } from '../infrastructure/sqs/sqs-client';
 import { SqsEventPublisher } from '../infrastructure/sqs/sqs-event-publisher';
-import { WagerQueueConsumer } from '../infrastructure/sqs/wager-queue-consumer';
+import { type ConsumerEvent, WagerQueueConsumer } from '../infrastructure/sqs/wager-queue-consumer';
 import { BACKGROUND_WORKERS, ORM, SQS_CLIENT } from '../infrastructure/tokens';
 import { WageringModule } from '../wagering.module';
 import { BackgroundWorkers } from './background-workers';
-import { SubmitWagerTransaction as SubmitToken } from '../application/submit-wager-transaction';
 
-const describe = (error: unknown): string =>
+const describeError = (error: unknown): string =>
   error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
+function recordConsumerEvent(metrics: Metrics, event: ConsumerEvent): void {
+  switch (event.type) {
+    case 'processed':
+      metrics.consumerMessages.inc({ result: event.duplicateMessage ? 'duplicate_message' : 'processed' });
+      break;
+    case 'business-conflict':
+      metrics.consumerMessages.inc({ result: 'business_conflict' });
+      break;
+    case 'retry':
+      metrics.consumerRetries.inc();
+      break;
+    case 'dead-letter':
+      metrics.dlqMessages.inc({ reason: event.reason });
+      break;
+    case 'released':
+      metrics.consumerMessages.inc({ result: 'released' });
+      break;
+    default:
+      break;
+  }
+}
 
 @Module({
   imports: [WageringModule],
   providers: [
     {
       provide: BACKGROUND_WORKERS,
-      useFactory: (orm: MikroORM, submit: SubmitWagerTransaction, sqs: SQSClient) => {
+      useFactory: (orm: MikroORM, submit: SubmitWagerTransaction, sqs: SQSClient, metrics: Metrics) => {
         const logger = new Logger('Workers');
         const now = () => new Date();
 
-        const publishOutbox = new PublishOutbox(
+        const publisher = new PublishOutbox(
           new MikroOutboxStore(orm),
           new SqsEventPublisher(sqs, eventsQueueUrl()),
           now,
           50,
-          (message, error) =>
-            logger.warn(`falha ao publicar ${message.eventType} ${message.id}: ${describe(error)}`),
+          (message, error) => {
+            metrics.outboxPublishFailures.inc();
+            logger.warn(`falha ao publicar ${message.eventType} ${message.id}: ${describeError(error)}`);
+          },
         );
+        const publishOutbox = {
+          runOnce: async () => {
+            const result = await publisher.runOnce();
+            metrics.outboxPublished.inc(result.published);
+            return result;
+          },
+        };
 
         const reprocessReferences = new ReprocessPendingReferences(
           new MikroPendingReferenceFinder(orm),
@@ -57,7 +84,8 @@ const describe = (error: unknown): string =>
           now,
           50,
           5,
-          (id, error) => logger.warn(`falha ao reprocessar a transação ${id}: ${describe(error)}`),
+          (id, error) => logger.warn(`falha ao reprocessar a transação ${id}: ${describeError(error)}`),
+          (outcome) => metrics.pendingReference.inc({ outcome }),
         );
 
         const consumer = new WagerQueueConsumer({
@@ -67,8 +95,9 @@ const describe = (error: unknown): string =>
           useCase: submit,
           maxReceiveCount: consumerMaxReceiveCount(),
           onEvent: (event) => {
+            recordConsumerEvent(metrics, event);
             if (event.type === 'error') {
-              logger.error(`erro no consumidor: ${describe(event.error)}`);
+              logger.error(`erro no consumidor: ${describeError(event.error)}`);
             } else {
               logger.log(event);
             }
@@ -81,10 +110,10 @@ const describe = (error: unknown): string =>
           consumer,
           outboxPollMs: outboxPollMs(),
           referencePollMs: referencePollMs(),
-          onError: (name, error) => logger.error(`laço ${name}: ${describe(error)}`),
+          onError: (name, error) => logger.error(`laço ${name}: ${describeError(error)}`),
         });
       },
-      inject: [ORM, SubmitToken, SQS_CLIENT],
+      inject: [ORM, SubmitWagerTransaction, SQS_CLIENT, Metrics],
     },
   ],
 })

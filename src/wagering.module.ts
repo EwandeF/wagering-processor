@@ -4,7 +4,9 @@ import { OpenWallet } from './application/open-wallet';
 import type { WagerUnitOfWork } from './application/ports';
 import { ReconcileWallet } from './application/reconcile-wallet';
 import { SubmitWagerTransaction } from './application/submit-wager-transaction';
+import { DEFAULT_PENDING_REFERENCE_POLICY } from './domain/pending-reference-policy';
 import { Metrics } from './infrastructure/observability/metrics';
+import { WagerTelemetry } from './infrastructure/observability/wager-telemetry';
 import { MikroReconciliationReader } from './infrastructure/persistence/mikro-reconciliation-reader';
 import { MikroWagerUnitOfWork } from './infrastructure/persistence/mikro-wager-unit-of-work';
 import { WagerQueryService } from './infrastructure/persistence/query-service';
@@ -28,8 +30,9 @@ import { WalletsController } from './interfaces/http/wallets.controller';
     },
     {
       provide: SubmitWagerTransaction,
-      useFactory: (uow: WagerUnitOfWork) => new SubmitWagerTransaction(uow),
-      inject: [WAGER_UNIT_OF_WORK],
+      useFactory: (uow: WagerUnitOfWork, telemetry: WagerTelemetry) =>
+        new SubmitWagerTransaction(uow, () => new Date(), DEFAULT_PENDING_REFERENCE_POLICY, telemetry),
+      inject: [WAGER_UNIT_OF_WORK, WagerTelemetry],
     },
     {
       provide: WagerQueryService,

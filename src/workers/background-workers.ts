@@ -1,10 +1,10 @@
-import type { PublishOutbox } from '../application/publish-outbox';
+import type { PublishOutboxResult } from '../application/publish-outbox';
 import type { ReprocessPendingReferences } from '../application/reprocess-pending-references';
 import type { WagerQueueConsumer } from '../infrastructure/sqs/wager-queue-consumer';
 import { PollingLoop } from './polling-loop';
 
 export interface BackgroundWorkersDeps {
-  publishOutbox: PublishOutbox;
+  publishOutbox: { runOnce(): Promise<PublishOutboxResult> };
   reprocessReferences: ReprocessPendingReferences;
   consumer: WagerQueueConsumer;
   outboxPollMs: number;

@@ -25,6 +25,7 @@ export class ReprocessPendingReferences {
     private readonly batchSize = 50,
     private readonly concurrency = 5,
     private readonly onFailure: (transactionId: string, error: unknown) => void = () => {},
+    private readonly onOutcome: (outcome: ReprocessOutcome) => void = () => {},
   ) {}
 
   /**
@@ -48,7 +49,13 @@ export class ReprocessPendingReferences {
       await Promise.all(
         chunk.map(async (id) => {
           try {
-            summary[await this.useCase.reprocessPending(id)] += 1;
+            const outcome = await this.useCase.reprocessPending(id);
+            summary[outcome] += 1;
+            try {
+              this.onOutcome(outcome);
+            } catch {
+              // Telemetria nunca derruba o ciclo.
+            }
           } catch (error) {
             // Continua devida: entra de novo no próximo ciclo.
             summary.failed += 1;
