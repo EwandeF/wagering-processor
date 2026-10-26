@@ -5,6 +5,7 @@ import { WagerTransactionKind, WagerTransactionStatus } from '../../domain/enums
 import { FAILURE_GUIDANCE } from '../../domain/failure-code';
 import type { WagerTransaction } from '../../domain/wager-transaction';
 import { WagerQueryService } from '../../infrastructure/persistence/query-service';
+import { resolveCorrelationId } from './correlation';
 import { InvalidRequestError } from './http-errors';
 import {
   asObject,
@@ -17,6 +18,7 @@ import {
 
 interface StatusResponse {
   status(code: number): unknown;
+  setHeader(name: string, value: string): unknown;
 }
 
 function parseIdempotencyKey(header: string | undefined): string {
@@ -80,14 +82,18 @@ export class TransactionsController {
   @Post('wagering/transactions')
   async submitTransaction(
     @Headers('idempotency-key') idempotencyKeyHeader: string | undefined,
+    @Headers('x-correlation-id') correlationHeader: string | undefined,
     @Body() body: unknown,
     @Res({ passthrough: true }) res: StatusResponse,
   ) {
     const idempotencyKey = parseIdempotencyKey(idempotencyKeyHeader);
+    const correlationId = resolveCorrelationId(correlationHeader);
+    res.setHeader('x-correlation-id', correlationId);
     const obj = asObject(body);
 
     const result = await this.submit.execute({
       idempotencyKey,
+      correlationId,
       providerId: requireText(obj, 'providerId'),
       externalTransactionId: requireText(obj, 'externalTransactionId'),
       playerId: requireUuid(obj, 'playerId'),
