@@ -90,7 +90,7 @@ export async function quarantineLeftovers(orm: MikroORM): Promise<void> {
   await exec('update outbox_messages set published_at = now() where published_at is null');
   await exec(
     "update wager_transactions set next_reference_attempt_at = now() + interval '1 day' where status = 'PENDING_REFERENCE'",
- );
+  );
 }
 
 export interface PublishedEvent {
