@@ -13,7 +13,8 @@
     "infra:up": "docker compose up -d",
     "stack:up": "docker compose --profile app up -d --build",
     "stack:down": "docker compose --profile app stop app1 app2 app3",
-    "stack:failover": "bun run scripts/stack-failover.ts"
+    "stack:failover": "bun run scripts/stack-failover.ts",
+    "migrate:roundtrip": "bash scripts/migration-roundtrip.sh"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
