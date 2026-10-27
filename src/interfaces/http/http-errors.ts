@@ -4,3 +4,13 @@ import { DomainError } from '../../domain/errors';
 export class InvalidRequestError extends DomainError {
   readonly code = 'INVALID_REQUEST';
 }
+
+/** Credenciais ausentes ou inválidas. */
+export class UnauthorizedError extends DomainError {
+  readonly code = 'UNAUTHENTICATED';
+}
+
+/** Identidade válida, mas sem permissão para este provedor. */
+export class ForbiddenError extends DomainError {
+  readonly code = 'FORBIDDEN';
+}

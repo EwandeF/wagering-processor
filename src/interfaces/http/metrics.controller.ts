@@ -1,6 +1,8 @@
+import { Public } from './public.decorator';
 import { Controller, Get, Header, Inject } from '@nestjs/common';
 import { Metrics } from '../../infrastructure/observability/metrics';
 
+@Public()
 @Controller('metrics')
 export class MetricsController {
   constructor(@Inject(Metrics) private readonly metrics: Metrics) {}

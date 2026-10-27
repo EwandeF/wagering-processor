@@ -1,3 +1,4 @@
+import { Public } from './public.decorator';
 import { GetQueueAttributesCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { Controller, Get, Inject, Res } from '@nestjs/common';
@@ -27,6 +28,7 @@ interface StatusResponse {
   status(code: number): unknown;
 }
 
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(

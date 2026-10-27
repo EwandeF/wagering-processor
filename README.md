@@ -123,6 +123,10 @@ Uma rejeição (`422`) traz o `failureCode` e o que o provedor deve fazer (`prov
 
 O header opcional `X-Correlation-Id` é devolvido na resposta e acompanha a operação até os logs e os eventos. Valores com caracteres fora de `A-Za-z0-9._:-` são substituídos por um UUID.
 
+## Autenticação
+
+**O build entregue não autentica.** Qualquer chamada é aceita. O que existe é o **ponto de extensão**: um `AuthGuard` global que consulta uma porta (`ProviderIdentityPort`, em `src/application/identity.ts`), e a implementação padrão (`AnonymousIdentity`) libera tudo. `/health/*` e `/metrics` ficam abertos por desenho. Os testes (`test/auth.test.ts`) plugam uma identidade falsa para provar `401`, `403` e a restrição por provedor. O desenho completo e o que faltaria estão em [ARCHITECTURE.md](ARCHITECTURE.md), seção 15.
+
 ## Mensageria
 
 **Entrada** (`wager-transactions.fifo`, DLQ em `wager-transactions-dlq.fifo`): mensagens `WagerTransactionRequested`, tratadas pelo mesmo caso de uso da API HTTP, deduplicadas por `(consumerName, messageId)` na inbox, e confirmadas só depois do commit. Erro de negócio terminal é confirmado, erro transitório volta com backoff e, esgotado o limite, vai para a DLQ; erro permanente (JSON inválido, valor inválido, wallet inexistente, `messageId` repetido com outro conteúdo) vai direto para a DLQ.
@@ -137,7 +141,7 @@ O header opcional `X-Correlation-Id` é devolvido na resposta e acompanha a oper
 
 ## Testes
 
-369 testes, todos passando. Os de integração e de concorrência usam **PostgreSQL e SQS reais** (o PostgreSQL é sempre real; o SQS é real em todos os testes de mensageria, exceto em alguns do publisher, onde um publicador roteirizado simula falhas e mede concorrência, e o caminho real tem teste próprio).
+383 testes, todos passando. Os de integração e de concorrência usam **PostgreSQL e SQS reais** (o PostgreSQL é sempre real; o SQS é real em todos os testes de mensageria, exceto em alguns do publisher, onde um publicador roteirizado simula falhas e mede concorrência, e o caminho real tem teste próprio).
 
 ```bash
 bun run infra:up && bun run migrate:up    # uma vez
@@ -146,10 +150,10 @@ bun run test                              # a suíte leva uns 2 minutos
 
 | Categoria | Testes | O que prova |
 |---|---:|---|
-| Unitários, sem banco | 160 | `Money` (escala, entradas inválidas, `0.10 + 0.20`), invariantes da `Wallet`, transições de `WagerTransaction`, política de reversão, eventos, `OutboxMessage` e `InboxMessage` (backoff), logger JSON, laço de polling |
+| Unitários, sem banco | 164 | `Money` (escala, entradas inválidas, `0.10 + 0.20`), invariantes da `Wallet`, transições de `WagerTransaction`, política de reversão, eventos, `OutboxMessage` e `InboxMessage` (backoff), logger JSON, laço de polling |
 | Persistência e schema | 25 | **Cada garantia do schema é testada tentando violá-la direto no banco**, sem passar pela aplicação: saldo negativo, ledger imutável (`UPDATE`, `DELETE` e `TRUNCATE`), lançamento que não fecha a conta, unicidade de idempotência por provedor, reversão única por referência, consistência de estado da transação, inbox e outbox. Cada violação tem um teste de controle mostrando que o SQL válido seria aceito. Mais a ida e volta pelo banco e os gatilhos das transações terminais |
 | Casos de uso no PostgreSQL | 56 | BET, WIN, LOSS, REFUND, ROLLBACK, idempotência e conflito de payload, inbox, atomicidade (falha no fim desfaz transação, ledger, saldo, inbox e outbox juntos), referências fora de ordem |
-| API HTTP | 87 | Status e formato de erro, wallets, transações, ledger paginado sob escrita concorrente, reconciliação, correlação e métricas |
+| API HTTP | 97 | Status e formato de erro, wallets, transações, ledger paginado sob escrita concorrente, reconciliação, correlação e métricas |
 | Mensageria com SQS real | 22 | Publisher com vários concorrentes, retry, DLQ, worker morto entre o commit e o ack, shutdown |
 | Concorrência | 6 | Duas apostas de 80 com saldo 100 (uma processada, uma `INSUFFICIENT_FUNDS`, saldo 20.00, um débito), a mesma aposta 50 vezes em paralelo, wallet quente com 150 apostas, wallets distintas em paralelo |
 | Ponta a ponta e multiprocesso | 13 | App completo com workers; **3 processos do sistema operacional** de verdade; `kill -9` no meio do consumo; reinício do serviço com reconciliação ao final |

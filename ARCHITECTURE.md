@@ -177,6 +177,8 @@ Cinco situações distintas, sempre com status distintos e o mesmo corpo de erro
 | Situação | Status | Reenviar? |
 |---|---|---|
 | Payload inválido, header ausente, cursor ou `limit` inválidos | `400` | Só depois de corrigir |
+| Credenciais ausentes ou inválidas (`WWW-Authenticate: Bearer`) | `401` | Com credenciais válidas |
+| Identidade sem permissão para o provedor | `403` | Não |
 | Wallet ou transação inexistente | `404` | Não |
 | Conflito de idempotência, ou wallet duplicada | `409` | Não, com este conteúdo |
 | Rejeição por regra de negócio | `422` | Conforme o `providerAction` |
@@ -351,3 +353,45 @@ Esta seção é deliberadamente franca: o que **funciona e está provado** está
 20. **As credenciais do `docker-compose.yml` são de desenvolvimento** (`wager/wager`, `test/test`), e o PostgreSQL e o LocalStack expõem portas no host. Não servem para produção.
 21. **`/metrics` e `/health/*` são abertos**, como o case prevê para a saúde. As métricas não levam valores nem ids, mas expõem contagens.
 22. **A imagem fixa o Bun em 1.4.4.** É reprodutível, mas exige atualização deliberada.
+23. **O build entregue não autentica** (seção 15): a implementação padrão da identidade aceita qualquer chamada.
+
+## 15. Autenticação
+
+**O build entregue não autentica.** A implementação padrão (`AnonymousIdentity`) aceita qualquer chamada. A decisão foi do case: autenticação não vale pontos e não deve competir com a correção financeira, a concorrência e a idempotência, e o case aceita não implementá-la desde que a decisão seja documentada e o ponto de extensão esteja explícito no código. Ele está.
+
+### O que existe
+
+| Peça | Onde | Papel |
+|---|---|---|
+| `ProviderIdentityPort` | `src/application/identity.ts` | Dada a requisição, devolve quem chama (`subject`) e, opcionalmente, **o provedor ao qual fica restrito** (`providerId`) |
+| `AuthGuard` global | `src/interfaces/http/auth.guard.ts` | Pergunta à porta; sem identidade, `401` |
+| `@Public()` | `src/interfaces/http/public.decorator.ts` | Mantém `/health/*` e `/metrics` abertos, como o case determina |
+| `AnonymousIdentity` | `src/infrastructure/auth/anonymous-identity.ts` | A implementação **padrão**: libera tudo |
+| Ligação | `src/app.module.ts` | Um único `provide: PROVIDER_IDENTITY`: é a linha que se troca |
+
+### Regras já impostas pelo código
+
+Quando uma identidade traz `providerId`, ela só atua em nome desse provedor:
+
+- Submeter uma transação, ou consultar por `(provedor, id externo)`, de **outro** provedor: `403`, sem nenhum efeito (o saldo e a `version` da wallet continuam intactos).
+- Consultar pelo **id interno** uma transação de outro provedor: `404`, e não `403`, para não revelar que ela existe.
+- Os endpoints de wallet (criar, consultar, ledger, reconciliação) exigem autenticação, mas **não** são restritos a um provedor: a wallet pertence ao jogador, não ao provedor.
+- `401` sai com `WWW-Authenticate: Bearer` e o mesmo corpo de erro dos demais endpoints.
+
+Provado por `test/auth.test.ts` (14 testes, contra o PostgreSQL real), com uma identidade **falsa** (uma tabela de tokens). Esse teste prova a **lógica de acesso**; ele não prova validação de token, porque nenhuma existe.
+
+### O desenho que adotaríamos
+
+Integrar um provedor de identidade externo (Keycloak, com OIDC, ou Zitadel), **sem tabela própria de usuários nem hash de senha**:
+
+1. Uma implementação de `ProviderIdentityPort` que valida o JWT do header `Authorization`: assinatura pelas chaves públicas do provedor (JWKS, com cache e rotação), emissor, audiência, expiração e `nbf`.
+2. Provedores de jogos entram como *service accounts* (fluxo de credenciais de cliente), com uma claim mapeada para `providerId`.
+3. Trocar o `useFactory` do `PROVIDER_IDENTITY` em `src/app.module.ts`. **Nenhuma outra linha muda**: o guard, as regras de acesso e os testes já existem.
+
+O nome da claim e a política de escopos são escolhas que **não foram testadas**, porque dependem do provedor escolhido.
+
+### Fora do escopo desta entrega
+
+- **Mensagens da fila** são tratadas como canal interno confiável, como o case prevê. O `providerId` da mensagem continua passando pelas mesmas validações de domínio, mas **não é conferido contra nenhuma identidade**.
+- Sem limite de taxa, sem revogação de token e sem terminação de TLS no app (supõe-se um proxy na frente).
+- `/metrics` é aberto: não expõe valores nem ids, mas expõe contagens (ver limitação 21).

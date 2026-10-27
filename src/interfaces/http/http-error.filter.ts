@@ -25,6 +25,9 @@ export class HttpErrorFilter implements ExceptionFilter {
     if (mapped.retryAfterSeconds !== undefined) {
       response.setHeader('Retry-After', String(mapped.retryAfterSeconds));
     }
+    for (const [name, value] of Object.entries(mapped.headers ?? {})) {
+      response.setHeader(name, value);
+    }
     response.status(mapped.status).json({
       error: { code: mapped.code, message: mapped.message },
     });

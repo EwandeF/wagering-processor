@@ -12,13 +12,14 @@ import {
   InvalidWagerTransactionError,
   InvalidWalletOperationError,
 } from '../../domain/errors';
-import { InvalidRequestError } from './http-errors';
+import { ForbiddenError, InvalidRequestError, UnauthorizedError } from './http-errors';
 
 export interface MappedHttpError {
   status: number;
   code: string;
   message: string;
   retryAfterSeconds?: number;
+  headers?: Record<string, string>;
 }
 
 // Erros de driver/rede/Postgres que indicam "tente de novo", não "bug".
@@ -42,6 +43,15 @@ const unavailable = (code: string, message: string): MappedHttpError => ({
 });
 
 export function toHttpError(error: unknown): MappedHttpError {
+  if (error instanceof UnauthorizedError) {
+    return {
+      status: 401, code: error.code, message: error.message,
+      headers: { 'www-authenticate': 'Bearer' },
+    };
+  }
+  if (error instanceof ForbiddenError) {
+    return { status: 403, code: error.code, message: error.message };
+  }
   if (
     error instanceof InvalidRequestError ||
     error instanceof InvalidMoneyError ||

@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Headers, Inject, Param, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import { TransactionNotFoundError } from '../../application/errors';
 import { SubmitWagerTransaction } from '../../application/submit-wager-transaction';
 import { WagerTransactionKind, WagerTransactionStatus } from '../../domain/enums';
 import { FAILURE_GUIDANCE } from '../../domain/failure-code';
 import type { WagerTransaction } from '../../domain/wager-transaction';
 import { WagerQueryService } from '../../infrastructure/persistence/query-service';
+import { type AuthenticatedRequest, assertProviderAccess, ownsTransaction } from './access';
 import { resolveCorrelationId } from './correlation';
 import { InvalidRequestError } from './http-errors';
 import {
@@ -84,17 +85,20 @@ export class TransactionsController {
     @Headers('idempotency-key') idempotencyKeyHeader: string | undefined,
     @Headers('x-correlation-id') correlationHeader: string | undefined,
     @Body() body: unknown,
+    @Req() req: AuthenticatedRequest,
     @Res({ passthrough: true }) res: StatusResponse,
   ) {
     const idempotencyKey = parseIdempotencyKey(idempotencyKeyHeader);
     const correlationId = resolveCorrelationId(correlationHeader);
     res.setHeader('x-correlation-id', correlationId);
     const obj = asObject(body);
+    const providerId = requireText(obj, 'providerId');
+    assertProviderAccess(req.identity, providerId);
 
     const result = await this.submit.execute({
       idempotencyKey,
       correlationId,
-      providerId: requireText(obj, 'providerId'),
+      providerId,
       externalTransactionId: requireText(obj, 'externalTransactionId'),
       playerId: requireUuid(obj, 'playerId'),
       walletId: requireUuid(obj, 'walletId'),
@@ -113,10 +117,11 @@ export class TransactionsController {
   }
 
   @Get('wagering/transactions/:transactionId')
-  async getById(@Param('transactionId') transactionId: string) {
+  async getById(@Param('transactionId') transactionId: string, @Req() req: AuthenticatedRequest) {
     const id = parseUuidParam(transactionId, 'transactionId');
     const transaction = await this.queries.findTransactionById(id);
-    if (!transaction) {
+    // De outro provedor: tratada como inexistente, para não revelar que ela existe.
+    if (!transaction || !ownsTransaction(req.identity, transaction.providerId)) {
       throw new TransactionNotFoundError(`transação ${id} não existe`);
     }
     return toView(transaction);
@@ -126,7 +131,9 @@ export class TransactionsController {
   async getByExternalId(
     @Param('providerId') providerId: string,
     @Param('externalTransactionId') externalTransactionId: string,
+    @Req() req: AuthenticatedRequest,
   ) {
+    assertProviderAccess(req.identity, providerId);
     const transaction = await this.queries.findTransactionByExternalId(
       providerId,
       externalTransactionId,
