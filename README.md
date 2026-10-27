@@ -131,13 +131,13 @@ O header opcional `X-Correlation-Id` é devolvido na resposta e acompanha a oper
 
 ## Observabilidade
 
-- **Logs** em JSON, uma linha por evento, com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId` no nível principal. Nunca levam valores monetários nem payloads.
+- **Logs** em JSON, uma linha por evento, com `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId` no nível principal. Nunca levam payloads nem valores de transações; a única exceção é a diferença numa divergência de reconciliação, necessária para diagnosticar.
 - **Métricas** (`/metrics`): transações por status e tipo, duplicatas detectadas, latência de processamento, espera pelo lock da wallet, conflitos de concorrência, retries e mensagens na DLQ, publicações e falhas da outbox, **outbox lag** (idade do evento pendente mais antigo) e pendentes, resultados do worker de referências e reconciliações com divergência.
 - **Health:** `live` não depende de nada externo; `ready` testa PostgreSQL e SQS com timeout de 2 s.
 
 ## Testes
 
-369 testes, todos passando. Os de integração e de concorrência usam **PostgreSQL e SQS reais** (nenhum mock substitui o banco ou a fila).
+369 testes, todos passando. Os de integração e de concorrência usam **PostgreSQL e SQS reais** (o PostgreSQL é sempre real; o SQS é real em todos os testes de mensageria, exceto em alguns do publisher, onde um publicador roteirizado simula falhas e mede concorrência, e o caminho real tem teste próprio).
 
 ```bash
 bun run infra:up && bun run migrate:up    # uma vez
